@@ -1,0 +1,38 @@
+docker-compose build --no-cache frontend
+WARN[0000] Docker Compose requires buildx plugin to be installed 
+docker-compose exec frontend sh -c "cat > src/Login.tsx" < ~/fluxhr/frontend/src/LSending build context to Docker daemon  60.69MB 14.16MB
+Step 1/7 : FROM node:20-alpine
+ ---> fb4cd12c85ee
+Step 2/7 : WORKDIR /app
+ ---> Running in 0f1948156a3a
+ ---> Removed intermediate container 0f1948156a3a
+ ---> 18fcfd804c8c
+Step 3/7 : COPY package.json yarn.lock ./
+ ---> f89c8a1998cc
+Step 4/7 : RUN yarn install
+ ---> Running in 890547de3d5f
+yarn install v1.22.22
+[1/4] Resolving packages...
+[2/4] Fetching packages...
+[3/4] Linking dependencies...
+warning " > @tailwindcss/forms@0.5.11" has unmet peer dependency "tailwindcss@>=3.0.0 || >= 3.0.0-alpha.1 || >= 4.0.0-alpha.20 || >= 4.0.0-beta.1".
+warning "react-scripts > eslint-config-react-app > eslint-plugin-flowtype@8.0.3" has unmet peer dependency "@babel/plugin-syntax-flow@^7.14.5".
+warning "react-scripts > eslint-config-react-app > eslint-plugin-flowtype@8.0.3" has unmet peer dependency "@babel/plugin-transform-react-jsx@^7.14.9".
+[4/4] Building fresh packages...
+Done in 43.63s.
+ ---> Removed intermediate container 890547de3d5f
+ ---> 36a6a1557b75
+Step 5/7 : COPY . .
+ ---> 5f051382e7be
+Step 6/7 : CMD ["yarn", "start"]
+ ---> Running in 134b54c230b9
+ ---> Removed intermediate container 134b54c230b9
+ ---> 4086ca25d810
+Step 7/7 : LABEL com.docker.compose.image.builder=classic
+ ---> Running in 946d13252be4
+ ---> Removed intermediate container 946d13252be4
+ ---> 2f1ac8c83bba
+Successfully built 2f1ac8c83bba
+Successfully tagged fluxhr-frontend:latest
+[+] build 1/1
+ ✔ Image fluxhr-frontend Built                                              267.5s

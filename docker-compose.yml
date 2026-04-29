@@ -1,0 +1,62 @@
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: fluxhr
+      POSTGRES_PASSWORD: fluxhr_secret
+      POSTGRES_DB: fluxhr_db
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    command: ["postgres", "-c", "shared_preload_libraries=pgcrypto"]
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgresql://fluxhr:fluxhr_secret@postgres:5432/fluxhr_db
+      REDIS_URL: redis://redis:6379/0
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery:
+    build: ./backend
+    command: celery -A celery_app worker --loglevel=info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://fluxhr:fluxhr_secret@postgres:5432/fluxhr_db
+      - SMTP_SERVER=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_USER=fabio.cerundolo@edu-its.it
+      - SMTP_PASSWORD=mwbrldluzqkeqpjc
+      - FROM_EMAIL=fabio.cerundolo@edu-its.it
+
+  frontend:
+    build: ./frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: yarn start
