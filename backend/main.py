@@ -11,8 +11,7 @@ import io
 import pdfplumber
 import docx
 from pydantic import BaseModel
-from cv_processor import process_cv_file
-
+from celery_app import send_art14_email
 
 from database import SessionLocal, Candidate, init_db
 from gdpr_sanitize import sanitize_cv
@@ -26,10 +25,10 @@ app = FastAPI(title="FluxHR API", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # meglio specificare
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ---------- Error handler for 422 ----------
@@ -78,9 +77,6 @@ def health():
     return {"status": "FluxHR ready"}
 
 # ---------- Authentication ----------
-from auth import Token, authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from fastapi.security import OAuth2PasswordRequestForm
-
 @app.post("/token", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = authenticate_user(form_data.username, form_data.password)
@@ -171,43 +167,14 @@ def extract_name_fallback(text: str, email: Optional[str] = None) -> Optional[st
     return None
 
 def extract_skills(text: str) -> List[str]:
-    # Cerca la sezione "COMPETENZE" (o "SKILLS") nel testo
-    import re
-    # pattern per trovare la sezione (case-insensitive)
-    match = re.search(r'(?:competenze|skills)[\s:]+(.*?)(?:\n\s*\n|\n[A-Z]{2,}|\Z)', text, re.IGNORECASE | re.DOTALL)
-    if not match:
-        return []
-    skills_text = match.group(1)
-    # Dividi per slash, virgole, newline, e spazi
-    # Prendi ogni parola che sembra una skill (almeno 2 caratteri, non numeri puri)
-    tokens = re.split(r'[/,\n]+', skills_text)
-    skills = []
-    for token in tokens:
-        token = token.strip()
-        if len(token) > 2 and not token.isdigit():
-            # Se il token contiene spazi, lo prendiamo intero (es. "Google Ads")
-            skills.append(token)
-    # Limita a 15 competenze per non esagerare
-    return skills[:15]
-
-# ---------- Delete CV endpoint (final, single version) ----------
-@app.delete("/candidates/{candidate_id}")
-def delete_candidate(
-    candidate_id: int,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
-):
-    candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
-    if not candidate:
-        raise HTTPException(404, detail="Candidato non trovato")
-    
-    # (Opzionale) Controllo admin – disabilitato per ora
-    # if current_user.role != "admin": raise HTTPException(403)
-    
-    db.delete(candidate)
-    db.commit()
-    return {"ok": True, "message": f"Candidato {candidate_id} eliminato"}
-
+    skills_list = [
+        "python", "java", "sql", "docker", "react", "fastapi",
+        "javascript", "typescript", "machine learning", "gcp",
+        "aws", "postgresql", "mongodb", "html", "css", "tailwind",
+        "kubernetes", "terraform", "golang", "redis", "django"
+    ]
+    found = [skill for skill in skills_list if skill in text.lower()]
+    return found[:10]
 
 # ---------- Upload CV endpoint (final, single version) ----------
 @app.post("/upload-cv")
@@ -216,34 +183,38 @@ async def upload_cv(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    try:
-        if not file.filename.endswith(('.pdf', '.docx')):
-            raise HTTPException(400, "Solo file PDF o DOCX")
-        contents = await file.read()
-        if len(contents) > 5 * 1024 * 1024:
-            raise HTTPException(400, "File troppo grande (max 5MB)")
-        
-        candidate = process_cv_file(contents, file.filename, db)
+    # Validazione estensione
+    if not file.filename.endswith(('.pdf', '.docx')):
+        raise HTTPException(400, "Solo file PDF o DOCX sono supportati")
 
-        # ----- INVIO EMAIL GDPR ART.14 (asincrono) -----
-        from celery_app import send_art14_email
-        send_art14_email.delay(candidate.email, candidate.name or "Candidato")
-        print(f"[GDPR Art.14] Email inviata a {candidate.email} (task accodato)")
+    contents = await file.read()
 
-        return {
-            "status": "ok",
-            "candidate_id": candidate.id,
-            "dati_estratti": {
-                "nome": candidate.name,
-                "email": candidate.email,
-                "telefono": candidate.phone,
-                "competenze": candidate.skills
-            }
-        }
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(400, str(e))
+    # Limite 5 MB
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(400, "File troppo grande (max 5MB)")
+
+    # Controllo minimo PDF
+    if file.filename.endswith('.pdf') and not contents.startswith(b'%PDF'):
+        raise HTTPException(400, "Il file non sembra un PDF valido")
+
+    # Estrazione testo
+    text = ""
+    if file.filename.endswith('.pdf'):
+        try:
+            with pdfplumber.open(io.BytesIO(contents)) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text
+        except Exception as e:
+            raise HTTPException(400, f"Errore nella lettura del PDF: {str(e)}")
+    else:  # .docx
+        try:
+            doc = docx.Document(io.BytesIO(contents))
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+        except Exception as e:
+            raise HTTPException(400, f"Errore nella lettura del DOCX: {str(e)}")
 
     if not text.strip():
         raise HTTPException(400, "Nessun testo estratto dal file")
@@ -280,7 +251,6 @@ async def upload_cv(
     db.add(candidate)
     db.commit()
     from celery_app import send_art14_email
-    
     send_art14_email.delay(candidate.email, candidate.name or "Candidato")
     db.refresh(candidate)
 

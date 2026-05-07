@@ -21,7 +21,6 @@ class Candidate(Base):
     status = Column(String, default="new")  # new, reviewed, shortlisted, rejected
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    cv_file_path = Column(String, nullable=True)
 
 # Crea tabelle all'avvio (solo sviluppo)
 def init_db():
