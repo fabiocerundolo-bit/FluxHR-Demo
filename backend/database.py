@@ -12,16 +12,15 @@ Base = declarative_base()
 
 class Candidate(Base):
     __tablename__ = "candidates"
-    
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=True)
     email = Column(String, nullable=False, index=True)
-    skills = Column(JSON, default=list)
     phone = Column(String, nullable=True)
-    status = Column(String, default="new")  # new, reviewed, shortlisted, rejected
+    skills = Column(JSON, default=list)
+    status = Column(String, default="new")
+    cv_file_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-# Crea tabelle all'avvio (solo sviluppo)
 def init_db():
     Base.metadata.create_all(bind=engine)

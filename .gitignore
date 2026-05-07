@@ -1,0 +1,22 @@
+# Docker
+data/
+uploads/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/.env
+
+# Logs
+*.log
+celerybeat-schedule
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
