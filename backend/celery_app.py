@@ -1,52 +1,174 @@
 from celery import Celery
+from celery.schedules import crontab
 import os
-import smtplib
-from email.message import EmailMessage
+from datetime import datetime, timedelta
+import re
+import imaplib
+import email
+from email.policy import default
 
-# Configurazione Redis (usa la stessa del docker-compose)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 celery_app = Celery('fluxhr', broker=REDIS_URL, backend=REDIS_URL)
 
-# Configurazioni email (da variabili d'ambiente)
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-SMTP_USER = os.getenv("SMTP_USER", "your-email@gmail.com")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "your-app-password")
-FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
+# Configurazione beat schedule
+celery_app.conf.beat_schedule = {
+    'delete-old-candidates': {
+        'task': 'celery_app.delete_old_candidates',
+        'schedule': crontab(hour=2, minute=0),
+    },
+    # 'import-emails': {   # commenta o rimuovi
+    #     'task': 'celery_app.import_emails_from_account',
+    #     'schedule': crontab(minute='*/5'),
+    # },
+}
+celery_app.conf.timezone = 'UTC'
 
+# ---------- Data retention ----------
+@celery_app.task
+def delete_old_candidates():
+    from database import SessionLocal
+    from database import Candidate
+    db = SessionLocal()
+    try:
+        six_months_ago = datetime.utcnow() - timedelta(days=180)
+        deleted = db.query(Candidate).filter(Candidate.created_at < six_months_ago).delete()
+        db.commit()
+        print(f"[Retention] Eliminati {deleted} candidati con più di 6 mesi")
+        return deleted
+    except Exception as e:
+        db.rollback()
+        print(f"[Retention] ERRORE: {e}")
+        raise
+    finally:
+        db.close()
+
+# ---------- Invio email Art.14 ----------
 @celery_app.task
 def send_art14_email(candidate_email: str, candidate_name: str = "Candidato"):
-    """
-    Invia l'informativa privacy GDPR Art.14 al candidato.
-    """
-    subject = "Informativa privacy - FluxHR"
-    body = f"""Gentile {candidate_name},
+    import smtplib
+    from email.message import EmailMessage
+    import os
 
-abbiamo ricevuto la Sua candidatura tramite la piattaforma FluxHR.
-Ai sensi dell'Art.14 del GDPR, La informiamo che:
+    SMTP_SERVER = os.getenv("SMTP_SERVER", "mailhog")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", 1025))
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+    FROM_EMAIL = os.getenv("FROM_EMAIL", "privacy@fluxhr.com")
 
-- I Suoi dati verranno trattati esclusivamente per finalità di selezione del personale.
-- I dati sensibili (salute, opinioni politiche, etc.) sono stati automaticamente rimossi.
-- Potrà richiedere la cancellazione dei Suoi dati in qualsiasi momento.
+    subject = "Informativa privacy ai sensi dell'Art. 14 GDPR - FluxHR"
 
-Per maggiori informazioni, contatti il responsabile HR.
+    # Corpo in testo semplice
+    body_text = f"""Gentile {candidate_name},
+
+abbiamo ricevuto il Suo curriculum vitae tramite la piattaforma FluxHR.
+
+Ai sensi dell'Art. 14 del Regolamento Generale sulla Protezione dei Dati (GDPR 2016/679), La informiamo che:
+
+- I Suoi dati personali (nome, email, competenze, esperienze) verranno trattati esclusivamente per finalità di selezione del personale.
+- I dati particolari (salute, opinioni politiche, credo religioso, ecc.) eventualmente presenti nel CV sono stati automaticamente rimossi dal sistema (sanitizzazione).
+- Il trattamento è basato sul legittimo interesse del Titolare e sull'esecuzione di misure precontrattuali.
+- I dati verranno conservati per un periodo massimo di 6 mesi, trascorsi i quali saranno cancellati automaticamente.
+- Lei ha il diritto di chiedere al Titolare l'accesso, la rettifica, la cancellazione, la limitazione del trattamento o di opporsi al trattamento.
+- Può esercitare tali diritti contattando il responsabile HR all'indirizzo privacy@fluxhr.com.
 
 Cordiali saluti,
 Il team di FluxHR
 """
+
+    # Corpo in HTML (più ricco)
+    body_html = f"""<html>
+<head></head>
+<body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto;">
+    <h2 style="color: #4f46e5;">FluxHR - Informativa privacy (Art. 14 GDPR)</h2>
+    <p>Gentile <strong>{candidate_name}</strong>,</p>
+    <p>abbiamo ricevuto il Suo curriculum vitae tramite la piattaforma FluxHR.</p>
+    <p>Ai sensi dell'<strong>Art. 14 del Regolamento Generale sulla Protezione dei Dati (GDPR 2016/679)</strong>, La informiamo che:</p>
+    <ul>
+        <li>I Suoi dati personali (nome, email, competenze, esperienze) verranno trattati esclusivamente per finalità di selezione del personale.</li>
+        <li>I dati particolari (salute, opinioni politiche, credo religioso, ecc.) eventualmente presenti nel CV sono stati automaticamente rimossi dal sistema (sanitizzazione).</li>
+        <li>Il trattamento è basato sul legittimo interesse del Titolare e sull'esecuzione di misure precontrattuali.</li>
+        <li>I dati verranno conservati per un periodo massimo di <strong>6 mesi</strong>, trascorsi i quali saranno cancellati automaticamente.</li>
+        <li>Lei ha il diritto di chiedere al Titolare l'accesso, la rettifica, la cancellazione, la limitazione del trattamento o di opporsi al trattamento.</li>
+        <li>Può esercitare tali diritti contattando il responsabile HR all'indirizzo <a href="mailto:privacy@fluxhr.com">privacy@fluxhr.com</a>.</li>
+    </ul>
+    <p>Cordiali saluti,<br>Il team di FluxHR</p>
+    <hr style="margin-top: 30px;">
+    <p style="font-size: 12px; color: #888;">Ricevi questo messaggio perché hai inviato una candidatura. Per maggiori informazioni, consultare la nostra privacy policy.</p>
+</body>
+</html>"""
+
     msg = EmailMessage()
-    msg.set_content(body)
+    msg.set_content(body_text)  # fallback in caso di lettori solo testo
+    msg.add_alternative(body_html, subtype='html')  # versione HTML
     msg["Subject"] = subject
     msg["From"] = FROM_EMAIL
     msg["To"] = candidate_email
 
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
+            if SMTP_SERVER != "mailhog":
+                server.starttls()
+                if SMTP_USER and SMTP_PASSWORD:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(msg)
         print(f"[Celery] Email Art.14 inviata a {candidate_email}")
         return True
     except Exception as e:
         print(f"[Celery] ERRORE invio email: {e}")
         return False
+
+# ---------- Import email automatico ----------
+@celery_app.task
+def import_emails_from_account():
+    import sys
+    import os
+    # Assicura che /app sia nel path di Python
+    if '/app' not in sys.path:
+        sys.path.insert(0, '/app')
+    
+    # Ora importa i moduli
+    from database import SessionLocal
+    from cv_processor import process_cv_file
+
+    try:
+        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+        mail.login(IMAP_USER, IMAP_PASSWORD)
+        mail.select("INBOX")
+        result, data = mail.search(None, "UNSEEN")
+        if result != "OK" or not data[0]:
+            print("[Import] Nessun messaggio non letto")
+            mail.close()
+            mail.logout()
+            return
+        email_ids = data[0].split()
+        for eid in email_ids:
+            result, msg_data = mail.fetch(eid, "(RFC822)")
+            if result != "OK":
+                continue
+            raw_email = msg_data[0][1]
+            msg = email.message_from_bytes(raw_email, policy=default)
+            from_addr = msg.get("From", "")
+            subject = msg.get("Subject", "")
+            print(f"[Import] Analizzo messaggio da {from_addr}: {subject[:50]}")
+            for part in msg.walk():
+                if part.get_content_disposition() == "attachment":
+                    filename = part.get_filename()
+                    if filename and filename.lower().endswith(('.pdf', '.docx')):
+                        content = part.get_payload(decode=True)
+                        db = SessionLocal()
+                        try:
+                            # Estrai email del mittente come fallback
+                            email_match = re.search(r'[\w\.-]+@[\w\.-]+', from_addr)
+                            fallback_email = email_match.group(0) if email_match else None
+                            candidate = process_cv_file(content, filename, db, source_email=fallback_email)
+                            print(f"[Import] Salvato candidato {candidate.id} da {filename}")
+                        except Exception as e:
+                            print(f"[Import] Errore su allegato {filename}: {e}")
+                        finally:
+                            db.close()
+            # Segna come letto
+            mail.store(eid, "+FLAGS", "\\Seen")
+        mail.close()
+        mail.logout()
+    except Exception as e:
+        print(f"[Import] ERRORE generale: {e}")

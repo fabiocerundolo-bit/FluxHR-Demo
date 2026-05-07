@@ -1,18 +1,19 @@
+import bcrypt
+from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
-from jose import JWTError, jwt
-from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
+# ---------- Configuration ----------
 SECRET_KEY = "your-secret-key-change-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# ---------- Pydantic models ----------
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -21,16 +22,20 @@ class UserInDB(BaseModel):
     username: str
     hashed_password: str
 
-# Username e password fittizi (in produzione dal DB)
+# ---------- Fake user database (solo per demo) ----------
+# L'hash è generato con bcrypt.hashpw(b"fluxhr2025", bcrypt.gensalt())
+# Se vuoi cambiare password, genera un nuovo hash con:
+# python -c "import bcrypt; print(bcrypt.hashpw(b'tua_password', bcrypt.gensalt()).decode())"
 fake_users_db = {
     "admin": {
         "username": "admin",
-        "hashed_password": "$2b$12$vIdvvdxzboXBq79FdmBbd.lRF8e3gMpq8OpqbWPnqWjIxqEwq1XgC"
+        "hashed_password": "$2b$12$S.dz23H6aeSHf4R1GL3dqeDBoj9O5i2AUWEe2o.EoKP4SUQmX1Uca"
     }
 }
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+# ---------- Helper functions ----------
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 def get_user(db, username: str):
     if username in db:
